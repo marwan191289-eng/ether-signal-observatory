@@ -12,7 +12,7 @@ import {
   type Horizon, HTF_PERIODS, HORIZON_SECONDS, takerBuyRatio, pressureAgrees, walkForward,
 } from "@/lib/engine";
 
-import { optimize } from "@/lib/optimizer";
+import { useOptimizer } from "@/hooks/use-optimizer";
 
 const PriceChart = lazy(() => import("@/components/PriceChart"));
 
@@ -54,8 +54,9 @@ function Dashboard() {
   }, []);
 
   const market = useMarketData();
-  const h15 = useHorizonData("15m");
-  const h1 = useHorizonData("1h");
+  const h5deep = useHorizonData("5m", 5);
+  const h15 = useHorizonData("15m", 5);
+  const h1 = useHorizonData("1h", 5);
   const book = useOrderBook();
   const { candles, stale, status } = market;
   const live = status === "live" && !stale;
@@ -77,17 +78,17 @@ function Dashboard() {
   const raw = useMemo(() => (hc.length > 50 ? computeSignal(hc) : null), [hc]);
   const [tuned, setTuned] = useState(true);
   const lastT0 = candles.length ? candles[candles.length - 1].time : 0;
-  const optSrc = horizon === "15m" ? h15.candles : horizon === "1h" ? h1.candles : candles;
-  const opt = useMemo(() => (optSrc.length > 400 ? optimize(optSrc.slice(0, -1), horizon, feePct) : null),
-    [horizon, optSrc.length, optSrc[optSrc.length - 1]?.time, feePct, horizon === "5m" ? lastT0 : 0]);
+  const optSrc = horizon === "15m" ? h15.candles : horizon === "1h" ? h1.candles : h5deep.candles;
+  const { opt, busy: optBusy } = useOptimizer(optSrc, horizon, feePct, (optSrc[optSrc.length - 1]?.time ?? 0) + (horizon === "5m" ? lastT0 : 0));
   const best = tuned ? opt?.best ?? null : null;
   const sig = useMemo(() => {
     if (!raw) return null;
     if (!best) return applyFilters(hc, hc.length - 1, raw, filters, { periods: HTF_PERIODS[horizon], book: book.imbalance });
-    const dir: Direction = raw.atr <= 0 ? "NEUTRAL" : raw.score > best.threshold ? "LONG" : raw.score < -best.threshold ? "SHORT" : "NEUTRAL";
+    const sc = raw.score * best.mode;
+    const dir: Direction = raw.atr <= 0 ? "NEUTRAL" : sc > best.threshold ? "LONG" : sc < -best.threshold ? "SHORT" : "NEUTRAL";
     const sg = dir === "SHORT" ? -1 : 1;
     const base = { ...raw, direction: dir, stop: raw.price - sg * best.stopAtr * raw.atr, target: raw.price + sg * best.targetAtr * raw.atr,
-      reasons: [...raw.reasons, `إعدادات مُعايَرة: عتبة ${best.threshold} · وقف ${best.stopAtr}ATR · هدف ${best.targetAtr}ATR · ${best.hold} شمعة`] };
+      reasons: [...raw.reasons, `إعدادات مُعايَرة: عتبة ${best.threshold} · وقف ${best.stopAtr}ATR · هدف ${best.targetAtr}ATR · ${best.hold} شمعة${best.mode === -1 ? " · نمط عكسي (ارتداد)" : ""}`] };
     return applyFilters(hc, hc.length - 1, base, best.filters, { periods: HTF_PERIODS[horizon], book: book.imbalance });
   }, [raw, hc, filters, horizon, book.imbalance, best]);
   const holdBars = best?.hold ?? 1;
@@ -277,12 +278,12 @@ function Dashboard() {
                 {tuned ? "✓ الإشارة تستخدم الإعدادات المُعايَرة" : "الإعدادات الافتراضية"}
               </button>
             </div>
-            {!opt ? <p className="text-sm text-muted-foreground">جارٍ تحميل البيانات…</p> : !opt.best ? (
+            {!opt ? <p className="text-sm text-muted-foreground">{optBusy ? "جارٍ اختبار التركيبات على آلاف الشموع…" : "جارٍ تحميل البيانات…"}</p> : !opt.best ? (
               <p className="text-sm text-muted-foreground">لا توجد إعدادات بعدد صفقات كافٍ ({opt.tested} تركيبة مُختبَرة).</p>
             ) : (
               <>
                 <p className="mb-3 font-mono text-xs text-muted-foreground" dir="ltr">
-                  threshold {opt.best.threshold} · stop {opt.best.stopAtr}ATR · target {opt.best.targetAtr}ATR · hold {opt.best.hold} bars · filters {[opt.best.filters.htfTrend && "HTF", opt.best.filters.volume && "VOL", opt.best.filters.pressure && "PRESS"].filter(Boolean).join("+") || "none"}
+                  threshold {opt.best.threshold} · stop {opt.best.stopAtr}ATR · target {opt.best.targetAtr}ATR · hold {opt.best.hold} bars · mode {opt.best.mode === 1 ? "trend" : "reversal"} · filters {[opt.best.filters.htfTrend && "HTF", opt.best.filters.volume && "VOL", opt.best.filters.pressure && "PRESS"].filter(Boolean).join("+") || "none"}
                 </p>
                 <div className="grid grid-cols-2 gap-4 font-mono text-sm">
                   {([["فترة المعايرة (70%)", opt.train!], ["فترة التحقق المستقلة (30%)", opt.test!]] as const).map(([l, s]) => (
@@ -300,7 +301,7 @@ function Dashboard() {
                     ? "الإعدادات رابحة بعد الرسوم في الفترتين، بما فيها فترة لم تُستخدم في الاختيار. هذا أقوى دليل متاح، لكنه لا يضمن المستقبل."
                     : "لم تصمد أفضل الإعدادات في فترة التحقق المستقلة — لا توجد أفضلية مثبتة لهذا الأفق حاليًا. جرّب أفقًا آخر أو انتظر."}
                 </p>
-                <p className="mt-1 text-xs text-muted-foreground">تم اختبار {opt.tested} تركيبة، وتُعاد المعايرة تلقائيًا مع كل شمعة جديدة.</p>
+                <p className="mt-1 text-xs text-muted-foreground">تم اختبار {opt.tested} تركيبة على {optSrc.length.toLocaleString("en-US")} شمعة (اتجاهي وعكسي)، وتُعاد المعايرة تلقائيًا مع كل شمعة جديدة.</p>
               </>
             )}
           </div>
