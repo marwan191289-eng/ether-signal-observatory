@@ -1,3 +1,4 @@
+import type React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ClientOnly } from "@tanstack/react-router";
@@ -393,7 +394,7 @@ function Dashboard() {
 function Stat({ k, v }: { k: string; v: string }) {
   return <div><p className="font-sans text-xs text-muted-foreground">{k}</p><p className="mt-1 font-semibold" dir="ltr">{v}</p></div>;
 }
-function Row({ k, v }: { k: string; v: string }) {
+function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return <div className="flex justify-between"><span className="font-sans text-muted-foreground">{k}</span><span dir="ltr">{v}</span></div>;
 }
 
