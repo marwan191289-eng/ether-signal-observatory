@@ -1,14 +1,19 @@
-# Welcome to your Lovable project
+# Ether Signal Observatory
+
+Clone this repo: this repo: https://github.com/marwan191289-eng/ethereum-signal-lab.git
+أكمل البناء الغير المكتمل والتطوير والتحسينات وصولاً لأفضل صورة ودقة منقطعة النظير
 
 This project was built with [Lovable](https://lovable.dev).
 
+**Live app**: https://ether-signal-observatory.lovable.app
+
 ## Build with Lovable
 
-Open your project in the [Lovable editor](https://lovable.dev) and keep building.
+Continue developing this project in the [Lovable editor](https://lovable.dev/projects/2f4d55e9-449d-447a-af18-c0a9d3888373).
 
 - **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: connect the project to GitHub and every change made in Lovable is committed straight to your repository.
-- **Full ownership**: this code is yours. Push to your repository and your changes sync back into Lovable, ready for your next prompt.
+- **Stay in sync**: every change made in Lovable is committed straight to this repository.
+- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
 
 ## Development
 
@@ -20,10 +25,3 @@ cd <repository-name>
 npm i
 npm run dev
 ```
-
-## Built with
-
-- TanStack Start
-- TypeScript
-- React
-- Tailwind CSS
