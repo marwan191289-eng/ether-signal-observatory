@@ -1,3 +1,4 @@
+import type React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ClientOnly } from "@tanstack/react-router";
@@ -10,6 +11,8 @@ import {
   applyFilters, backtestFiltered, DEFAULT_FILTERS, NO_FILTERS, type Filters, computeSignal, positionSize, type Direction,
   type Horizon, HTF_PERIODS, HORIZON_SECONDS, takerBuyRatio, pressureAgrees, walkForward,
 } from "@/lib/engine";
+
+import { optimize } from "@/lib/optimizer";
 
 const PriceChart = lazy(() => import("@/components/PriceChart"));
 
@@ -72,7 +75,22 @@ function Dashboard() {
   }, [horizon, candles, h15.candles, h1.candles, livePrice]);
 
   const raw = useMemo(() => (hc.length > 50 ? computeSignal(hc) : null), [hc]);
-  const sig = useMemo(() => (raw ? applyFilters(hc, hc.length - 1, raw, filters, { periods: HTF_PERIODS[horizon], book: book.imbalance }) : null), [raw, hc, filters, horizon, book.imbalance]);
+  const [tuned, setTuned] = useState(true);
+  const lastT0 = candles.length ? candles[candles.length - 1].time : 0;
+  const optSrc = horizon === "15m" ? h15.candles : horizon === "1h" ? h1.candles : candles;
+  const opt = useMemo(() => (optSrc.length > 400 ? optimize(optSrc.slice(0, -1), horizon, feePct) : null),
+    [horizon, optSrc.length, optSrc[optSrc.length - 1]?.time, feePct, horizon === "5m" ? lastT0 : 0]);
+  const best = tuned ? opt?.best ?? null : null;
+  const sig = useMemo(() => {
+    if (!raw) return null;
+    if (!best) return applyFilters(hc, hc.length - 1, raw, filters, { periods: HTF_PERIODS[horizon], book: book.imbalance });
+    const dir: Direction = raw.atr <= 0 ? "NEUTRAL" : raw.score > best.threshold ? "LONG" : raw.score < -best.threshold ? "SHORT" : "NEUTRAL";
+    const sg = dir === "SHORT" ? -1 : 1;
+    const base = { ...raw, direction: dir, stop: raw.price - sg * best.stopAtr * raw.atr, target: raw.price + sg * best.targetAtr * raw.atr,
+      reasons: [...raw.reasons, `إعدادات مُعايَرة: عتبة ${best.threshold} · وقف ${best.stopAtr}ATR · هدف ${best.targetAtr}ATR · ${best.hold} شمعة`] };
+    return applyFilters(hc, hc.length - 1, base, best.filters, { periods: HTF_PERIODS[horizon], book: book.imbalance });
+  }, [raw, hc, filters, horizon, book.imbalance, best]);
+  const holdBars = best?.hold ?? 1;
   const taker = hc.length ? takerBuyRatio(hc, hc.length - 1) : null;
   const pressureOk = raw && raw.direction !== "NEUTRAL" ? pressureAgrees(raw.direction, taker, book.imbalance) : null;
 
@@ -141,8 +159,8 @@ function Dashboard() {
     const now = Date.now();
     setTrades((t) => [{
       id: now, dir: sig.direction, entry: sig.price, stop: sig.stop, target: sig.target, qty: size.qty, time: now,
-      horizon, expiresAt: now + HORIZON_SECONDS[horizon] * 1000, feePct, confidence: sig.confidence,
-      filters: { ...filters }, taker, book: book.imbalance, pressureOk: pressureOk ?? false, expectedR: expectedOOS,
+      horizon, expiresAt: now + HORIZON_SECONDS[horizon] * holdBars * 1000, feePct, confidence: sig.confidence,
+      filters: { ...(best?.filters ?? filters) }, taker, book: book.imbalance, pressureOk: pressureOk ?? false, expectedR: best && opt?.test ? opt.test.expectancy : expectedOOS,
     }, ...t]);
   };
   const clearClosed = () => setTrades((t) => t.filter((x) => x.exit === undefined));
@@ -251,6 +269,42 @@ function Dashboard() {
             )}
           </div>
 
+          <div className="panel p-5">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="font-semibold">المعايرة الذكية — أفق {horizon}</h2>
+              <button onClick={() => setTuned((t) => !t)}
+                className={`rounded-md border px-3 py-1 text-xs ${tuned ? "border-primary text-primary" : "border-border text-muted-foreground"}`}>
+                {tuned ? "✓ الإشارة تستخدم الإعدادات المُعايَرة" : "الإعدادات الافتراضية"}
+              </button>
+            </div>
+            {!opt ? <p className="text-sm text-muted-foreground">جارٍ تحميل البيانات…</p> : !opt.best ? (
+              <p className="text-sm text-muted-foreground">لا توجد إعدادات بعدد صفقات كافٍ ({opt.tested} تركيبة مُختبَرة).</p>
+            ) : (
+              <>
+                <p className="mb-3 font-mono text-xs text-muted-foreground" dir="ltr">
+                  threshold {opt.best.threshold} · stop {opt.best.stopAtr}ATR · target {opt.best.targetAtr}ATR · hold {opt.best.hold} bars · filters {[opt.best.filters.htfTrend && "HTF", opt.best.filters.volume && "VOL", opt.best.filters.pressure && "PRESS"].filter(Boolean).join("+") || "none"}
+                </p>
+                <div className="grid grid-cols-2 gap-4 font-mono text-sm">
+                  {([["فترة المعايرة (70%)", opt.train!], ["فترة التحقق المستقلة (30%)", opt.test!]] as const).map(([l, s]) => (
+                    <div key={l} className="rounded-md border border-border p-3">
+                      <p className="mb-2 font-sans text-xs text-muted-foreground">{l}</p>
+                      <Row k="صفقات" v={String(s.trades)} />
+                      <Row k="إصابة" v={`${s.winRate.toFixed(0)}%`} />
+                      <Row k="التوقع" v={<span className={s.expectancy > 0 ? "text-bull" : "text-bear"}>{s.expectancy.toFixed(3)}R</span>} />
+                      <Row k="أقصى تراجع" v={`${s.maxDD.toFixed(2)}R`} />
+                    </div>
+                  ))}
+                </div>
+                <p className={`mt-3 text-xs leading-relaxed ${opt.robust ? "text-bull" : "text-bear"}`}>
+                  {opt.robust
+                    ? "الإعدادات رابحة بعد الرسوم في الفترتين، بما فيها فترة لم تُستخدم في الاختيار. هذا أقوى دليل متاح، لكنه لا يضمن المستقبل."
+                    : "لم تصمد أفضل الإعدادات في فترة التحقق المستقلة — لا توجد أفضلية مثبتة لهذا الأفق حاليًا. جرّب أفقًا آخر أو انتظر."}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">تم اختبار {opt.tested} تركيبة، وتُعاد المعايرة تلقائيًا مع كل شمعة جديدة.</p>
+              </>
+            )}
+          </div>
+
           <HorizonLab data={{ "15m": h15.candles, "1h": h1.candles }} feePct={feePct} onFeeChange={setFeePct} />
 
           <PaperLab trades={trades} stale={stale} onClose={closeTrade} onClear={clearClosed} />
@@ -305,7 +359,7 @@ function Dashboard() {
             <div className="mt-4 space-y-2 font-mono text-sm">
               <Row k="المخاطرة" v={size ? `${fmt(size.riskAmount)} USDT` : "—"} />
               <Row k="وقف الخسارة" v={sig ? fmt(sig.stop) : "—"} />
-              <Row k="الهدف (1.33R)" v={sig ? fmt(sig.target) : "—"} />
+              <Row k={`الهدف (${sig && Math.abs(sig.price - sig.stop) > 0 ? (Math.abs(sig.target - sig.price) / Math.abs(sig.price - sig.stop)).toFixed(2) : "—"}R)`} v={sig ? fmt(sig.target) : "—"} />
               <Row k="الكمية" v={size ? `${size.qty.toFixed(4)} ETH` : "—"} />
               <Row k="حجم المركز" v={size ? `${fmt(size.notional)} USDT` : "—"} />
             </div>
@@ -313,6 +367,7 @@ function Dashboard() {
               className="mt-4 w-full rounded-md bg-primary py-2.5 text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:opacity-40">
               فتح صفقة ورقية
             </button>
+            {tuned && opt && !opt.robust && sig?.direction !== "NEUTRAL" && <p className="mt-2 text-xs text-bear">تنبيه: لا أفضلية مثبتة لهذا الأفق — للتجربة فقط.</p>}
             {stale && <p className="mt-2 text-xs text-bear">الأسعار غير محدّثة — التداول الورقي متوقف مؤقتًا.</p>}
           </div>
 
@@ -339,7 +394,7 @@ function Dashboard() {
 function Stat({ k, v }: { k: string; v: string }) {
   return <div><p className="font-sans text-xs text-muted-foreground">{k}</p><p className="mt-1 font-semibold" dir="ltr">{v}</p></div>;
 }
-function Row({ k, v }: { k: string; v: string }) {
+function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return <div className="flex justify-between"><span className="font-sans text-muted-foreground">{k}</span><span dir="ltr">{v}</span></div>;
 }
 

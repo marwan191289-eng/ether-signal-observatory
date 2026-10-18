@@ -3,3 +3,4 @@
 - [x] Five-minute OHLC backtest and risk-rule regression tests.
 - [x] Accurate notification permission state and manual paper-trade closing.
 - [x] Verify live workflow and layout.
+- [x] Self-tuning signal settings with independent validation per horizon.
