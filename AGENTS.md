@@ -13,3 +13,4 @@
 - Market connectivity is isolated in use-market-data with REST fallback, stream recovery and freshness checks so stale prices cannot open paper trades.
 - Backtests use completed five-minute candles and next-candle OHLC with conservative stop-first resolution when both exit levels are touched; this avoids claiming close-direction accuracy as trading performance.
 - Signal filters (higher-timeframe EMA proxy, volume) live in applyFilters in engine.ts; dashboard backtests always deduct fees so results are not overstated.
+- Parameter tuning lives in src/lib/optimizer.ts: settings are chosen on the first 70% of candles only and judged on the untouched last 30%; a horizon is only called robust when both periods are positive after fees, so tuning can't hide overfitting.
